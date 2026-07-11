@@ -2,7 +2,12 @@ from datetime import date, time
 
 import pytest
 
-from finalsurge_api import FinalSurgeClient, PlannedWorkout, WriteProtectionError
+from finalsurge_api import (
+    FinalSurgeClient,
+    LibraryWorkout,
+    PlannedWorkout,
+    WriteProtectionError,
+)
 
 
 def test_calendar_payload_matches_discovered_quick_add_contract():
@@ -34,3 +39,26 @@ def test_write_requires_explicit_opt_in():
 
     with pytest.raises(WriteProtectionError):
         client.create_planned_workout(workout)
+
+
+def test_parse_library_preserves_planned_distance_and_duration():
+    workouts = FinalSurgeClient._parse_library(
+        """
+        <table><tr>
+          <td>Long Run</td><td>Run 10</td><td>Comfortable effort</td>
+          <td>10 mi</td><td>1:30:00</td>
+          <td><a href="WorkoutLibrary.cshtml?key=abc&folderid=def">open</a></td>
+        </tr></table>
+        """
+    )
+
+    assert workouts == [
+        LibraryWorkout(
+            key="abc",
+            name="Run 10",
+            description="Comfortable effort",
+            activity_type="00000001-0001-0001-0001-000000000001",
+            distance_miles=10,
+            duration_minutes=90,
+        )
+    ]
