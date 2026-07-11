@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "finalsurge-api"
+version = "0.1.0"
+description = "Unofficial, conservative client for Final Surge's authenticated web workflow."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.32,<3"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "responses>=0.25,<1", "ruff>=0.12,<1"]
+
+[tool.setuptools.packages.find]
+include = ["finalsurge_api*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP"]
