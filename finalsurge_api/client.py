@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import subprocess
+import threading
 import time as clock
 from dataclasses import dataclass
 from datetime import date, time
 from urllib.parse import urljoin
 
 import requests
+from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from .exceptions import (
     AuthenticationError,
@@ -28,6 +33,16 @@ class PlannedWorkout:
     activity_type: str = RUN_ACTIVITY
 
 
+@dataclass(frozen=True)
+class LibraryWorkout:
+    key: str
+    name: str
+    description: str
+    activity_type: str
+    distance_miles: float | None
+    duration_minutes: int | None
+
+
 class FinalSurgeClient:
     """Private Final Surge web client.
 
@@ -47,13 +62,36 @@ class FinalSurgeClient:
         self.password = password
         self.timeout = timeout
         self.min_request_interval = min_request_interval
+        self._request_lock = threading.Lock()
         self._last_request_at = 0.0
         self.session = requests.Session()
+        retry = Retry(
+            total=2,
+            connect=2,
+            read=2,
+            status=2,
+            backoff_factor=0.5,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({"GET", "HEAD"}),
+            respect_retry_after_header=True,
+            raise_on_status=False,
+        )
+        self.session.mount("https://", HTTPAdapter(max_retries=retry))
         self.session.headers.update(
             {
                 "User-Agent": "finalsurge-api/0.1 (personal automation)",
                 "Accept-Language": "en-US,en;q=0.9",
             }
+        )
+
+    @classmethod
+    def from_1password(
+        cls, *, vault: str = "Homelab", item: str = "log.finalsurge.com"
+    ) -> FinalSurgeClient:
+        """Load Final Surge credentials into memory from the 1Password CLI."""
+        return cls(
+            cls._onepassword_field(item, vault, "username"),
+            cls._onepassword_field(item, vault, "password"),
         )
 
     def login(self) -> None:
@@ -85,6 +123,31 @@ class FinalSurgeClient:
         )
         self._require_authenticated(response)
         return response.text
+
+    def list_library(self) -> list[LibraryWorkout]:
+        response = self._request("GET", "WorkoutLibrary.cshtml")
+        self._require_authenticated(response)
+        return self._parse_library(response.text)
+
+    def schedule_library_workout(
+        self,
+        library_workout: LibraryWorkout,
+        day: date,
+        *,
+        allow_writes: bool = False,
+    ) -> requests.Response:
+        """Schedule a library entry without modifying the source library item."""
+        return self.create_planned_workout(
+            PlannedWorkout(
+                day=day,
+                name=library_workout.name,
+                description=library_workout.description,
+                distance_miles=library_workout.distance_miles,
+                duration_minutes=library_workout.duration_minutes,
+                activity_type=library_workout.activity_type,
+            ),
+            allow_writes=allow_writes,
+        )
 
     def create_planned_workout(
         self, workout: PlannedWorkout, *, allow_writes: bool = False
@@ -165,10 +228,13 @@ class FinalSurgeClient:
         }
 
     def _request(self, method: str, path: str, **kwargs: object) -> requests.Response:
-        wait = self.min_request_interval - (clock.monotonic() - self._last_request_at)
-        if wait > 0:
-            clock.sleep(wait)
-        self._last_request_at = clock.monotonic()
+        with self._request_lock:
+            wait = self.min_request_interval - (
+                clock.monotonic() - self._last_request_at
+            )
+            if wait > 0:
+                clock.sleep(wait)
+            self._last_request_at = clock.monotonic()
         kwargs.setdefault("timeout", self.timeout)
         response = self.session.request(method, urljoin(BASE_URL, path), **kwargs)
         response.raise_for_status()
@@ -187,3 +253,70 @@ class FinalSurgeClient:
     def _require_authenticated(response: requests.Response) -> None:
         if "login.cshtml" in response.url or "login_name" in response.text:
             raise AuthenticationError("Final Surge session is missing or expired.")
+
+    @staticmethod
+    def _onepassword_field(item: str, vault: str, field: str) -> str:
+        try:
+            return subprocess.run(
+                [
+                    "op",
+                    "item",
+                    "get",
+                    item,
+                    "--vault",
+                    vault,
+                    "--fields",
+                    field,
+                    "--reveal",
+                ],
+                check=True,
+                capture_output=True,
+                encoding="utf-8",
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise AuthenticationError(
+                "Could not load Final Surge credentials from 1Password."
+            ) from exc
+
+    @staticmethod
+    def _parse_library(html: str) -> list[LibraryWorkout]:
+        workouts: list[LibraryWorkout] = []
+        for row in BeautifulSoup(html, "html.parser").select("tr"):
+            link = row.select_one('a[href*="WorkoutLibrary.cshtml?key="]')
+            cells = [cell.get_text(" ", strip=True) for cell in row.select("td")]
+            if link is None or len(cells) < 2:
+                continue
+            key = link["href"].split("key=", 1)[1].split("&", 1)[0]
+            subtype, name, *remaining = cells
+            distance = next((value for value in remaining if value.endswith(" mi")), "")
+            duration = next((value for value in remaining if ":" in value), "")
+            description = next(
+                (value for value in remaining if value not in {distance, duration}), ""
+            )
+            workouts.append(
+                LibraryWorkout(
+                    key=key,
+                    name=name or subtype,
+                    description=description,
+                    activity_type=RUN_ACTIVITY if "Run" in subtype else "",
+                    distance_miles=(
+                        float(distance.removesuffix(" mi")) if distance else None
+                    ),
+                    duration_minutes=FinalSurgeClient._duration_minutes(duration),
+                )
+            )
+        return workouts
+
+    @staticmethod
+    def _duration_minutes(value: str) -> int | None:
+        if not value:
+            return None
+        parts = value.split(":")
+        try:
+            if len(parts) == 2:
+                return int(parts[0]) * 60 + int(parts[1])
+            if len(parts) == 3:
+                return int(parts[0]) * 60 + int(parts[1]) + round(int(parts[2]) / 60)
+        except ValueError:
+            return None
+        return None
