@@ -174,9 +174,7 @@ class FinalSurgeClient:
         date_text = workout.day.strftime("%-m/%-d/%Y")
         time_text = workout.at.strftime("%I:%M %p").lstrip("0") if workout.at else ""
         distance = "" if workout.distance_miles is None else str(workout.distance_miles)
-        duration = (
-            "" if workout.duration_minutes is None else str(workout.duration_minutes)
-        )
+        duration = self._format_duration(workout.duration_minutes)
         return {
             "Add": "1",
             "ViewStart": date_text,
@@ -239,6 +237,14 @@ class FinalSurgeClient:
         response = self.session.request(method, urljoin(BASE_URL, path), **kwargs)
         response.raise_for_status()
         return response
+
+    @staticmethod
+    def _format_duration(minutes: int | None) -> str:
+        """Format planned minutes as Final Surge's ``H:MM:SS`` form value."""
+        if minutes is None:
+            return ""
+        hours, remaining_minutes = divmod(minutes, 60)
+        return f"{hours}:{remaining_minutes:02d}:00"
 
     @staticmethod
     def _require_planned_workout(workout: PlannedWorkout) -> None:

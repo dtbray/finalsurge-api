@@ -29,7 +29,7 @@ def test_calendar_payload_matches_discovered_quick_add_contract():
     assert payload["WorkoutTime"] == "6:00 AM"
     assert payload["PlannedWorkout"] == "True"
     assert payload["PDistance"] == "5"
-    assert payload["PDuration"] == "50"
+    assert payload["PDuration"] == "0:50:00"
     assert payload["btnSubmit"] == "Add Workout"
 
 
@@ -39,6 +39,15 @@ def test_write_requires_explicit_opt_in():
 
     with pytest.raises(WriteProtectionError):
         client.create_planned_workout(workout)
+
+
+def test_duration_serializes_hours_and_minutes_for_finalsurge():
+    client = FinalSurgeClient("user", "password")
+    payload = client._calendar_payload(
+        PlannedWorkout(date(2026, 10, 1), "Long run", duration_minutes=90)
+    )
+
+    assert payload["PDuration"] == "1:30:00"
 
 
 def test_parse_library_preserves_planned_distance_and_duration():
