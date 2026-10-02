@@ -35,3 +35,26 @@ Keep credentials in the Homelab 1Password vault (`log.finalsurge.com`); do not
 put them in source control or environment files checked into git. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for development checks and
 [HERMES.md](HERMES.md) for the agent collaboration contract.
+
+## Strava gear reporting
+
+`StravaClient` is read-only. It uses Strava's official API to fetch your shoes,
+the lifetime mileage Strava assigns to each shoe, and an activity-window mileage
+breakdown. Create a Strava API application and grant an OAuth token
+`profile:read_all` and `activity:read_all`; keep its current short-lived access
+token in the Homelab 1Password item `Strava API`, field `access_token`.
+
+```python
+from datetime import date
+from pathlib import Path
+
+from finalsurge_api import StravaClient
+
+client = StravaClient.from_1password()
+report = client.gear_report(after=date(2026, 1, 1))
+client.export_gear_report_csv(report, Path("strava-shoe-mileage.csv"))
+```
+
+The CSV includes lifetime mileage, selected-period mileage, and the number of
+activities assigned to each shoe. Activities assigned to a retired/deleted shoe
+are retained as an explicit `Unknown or retired shoe` row rather than dropped.
