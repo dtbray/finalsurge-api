@@ -8,7 +8,7 @@ from datetime import date, time
 from urllib.parse import urljoin, urlsplit
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -64,6 +64,7 @@ class FinalSurgeClient:
         self.min_request_interval = min_request_interval
         self._request_lock = threading.Lock()
         self._last_request_at = 0.0
+        self._authenticated = False
         self.session = requests.Session()
         retry = Retry(
             total=2,
@@ -95,10 +96,13 @@ class FinalSurgeClient:
         )
 
     def login(self) -> None:
+        previously_authenticated = self._authenticated
+        self._authenticated = False
         login_page = self._follow_login_redirects(
             self._request("GET", "login.cshtml", allow_redirects=False)
         )
-        if self._is_dashboard(login_page):
+        if previously_authenticated and self._is_dashboard(login_page):
+            self._authenticated = True
             return
         soup = BeautifulSoup(login_page.text, "html.parser")
         form = next(
@@ -118,29 +122,13 @@ class FinalSurgeClient:
             "login_remember": "on",
             "page_redirect": "/",
         }
-        payload = []
-        # Match successful input controls, preserving repeated auxiliary fields.
-        for field in form.select("input[name]"):
-            field_type = str(field.get("type", "text")).casefold()
-            if (
-                field.has_attr("disabled")
-                or field.find_parent("fieldset", disabled=True) is not None
-                or field["name"] in credentials
-                or field_type in {"file", "submit", "button", "reset", "image"}
-                or (
-                    field_type in {"checkbox", "radio"}
-                    and not field.has_attr("checked")
-                )
-            ):
-                continue
-            default = "on" if field_type in {"checkbox", "radio"} else ""
-            payload.append((str(field["name"]), str(field.get("value", default))))
-        payload.extend(credentials.items())
+        payload = self._login_payload(form, credentials)
         destination = urljoin(login_page.url, form.get("action") or login_page.url)
         if not self._same_origin(destination):
             raise AuthenticationError("Final Surge login action must be same-origin.")
         response = self._follow_login_redirects(
-            self._request("POST", destination, data=payload, allow_redirects=False)
+            self._request("POST", destination, data=payload, allow_redirects=False),
+            credential_post=True,
         )
         self._require_authenticated(response)
         if not self._is_dashboard(response):
@@ -149,7 +137,63 @@ class FinalSurgeClient:
                 "Interactive authentication or a changed page may require review."
             )
 
-    def _follow_login_redirects(self, response: requests.Response) -> requests.Response:
+        self._authenticated = True
+
+    @staticmethod
+    def _login_payload(form: Tag, credentials: dict[str, str]) -> list[tuple[str, str]]:
+        payload: list[tuple[str, str]] = []
+        for field in form.select("input[name], select[name], textarea[name]"):
+            if (
+                not field["name"]
+                or field.has_attr("disabled")
+                or field.find_parent("fieldset", disabled=True) is not None
+                or field["name"] in credentials
+            ):
+                continue
+            name = str(field["name"])
+            if field.name == "textarea":
+                text = field.get_text().replace("\r\n", "\n").replace("\r", "\n")
+                payload.append((name, text.replace("\n", "\r\n")))
+                continue
+            if field.name == "select":
+                options = field.select("option")
+                selected = [option for option in options if option.has_attr("selected")]
+                if not field.has_attr("multiple"):
+                    if selected:
+                        selected = selected[-1:]
+                    else:
+                        selected = [
+                            option
+                            for option in options
+                            if not option.has_attr("disabled")
+                            and option.find_parent("optgroup", disabled=True) is None
+                        ][:1]
+                for option in selected:
+                    if (
+                        option.has_attr("disabled")
+                        or option.find_parent("optgroup", disabled=True) is not None
+                    ):
+                        continue
+                    payload.append(
+                        (
+                            name,
+                            str(option.get("value", option.get_text(" ", strip=True))),
+                        )
+                    )
+                continue
+            field_type = str(field.get("type", "text")).casefold()
+            if field_type in {"file", "submit", "button", "reset", "image"} or (
+                field_type in {"checkbox", "radio"} and not field.has_attr("checked")
+            ):
+                continue
+            default = "on" if field_type in {"checkbox", "radio"} else ""
+            payload.append((name, str(field.get("value", default))))
+        payload.extend(credentials.items())
+        return payload
+
+    def _follow_login_redirects(
+        self, response: requests.Response, *, credential_post: bool = False
+    ) -> requests.Response:
         for _ in range(5):
             if not 300 <= response.status_code < 400:
                 return response
@@ -161,8 +205,14 @@ class FinalSurgeClient:
                 raise AuthenticationError(
                     "Final Surge login redirect must be same-origin."
                 )
+            if credential_post and response.status_code in {307, 308}:
+                raise AuthenticationError(
+                    "Final Surge login POST requires credential replay, "
+                    "which is refused."
+                )
             # Never replay credentials on 307/308 or follow unchecked redirects.
             response = self._request("GET", redirect, allow_redirects=False)
+            credential_post = False
         if 300 <= response.status_code < 400:
             raise AuthenticationError("Final Surge login has too many redirects.")
         return response
@@ -176,7 +226,10 @@ class FinalSurgeClient:
             and urlsplit(response.url).path in {"", "/"}
             and response.status_code < 300
             and "Dashboard" in response.text
-            and "login_name" not in response.text
+            and BeautifulSoup(response.text, "html.parser").select_one(
+                'form input[name="login_name"]'
+            )
+            is None
         )
 
     @staticmethod
@@ -341,7 +394,13 @@ class FinalSurgeClient:
 
     @staticmethod
     def _require_authenticated(response: requests.Response) -> None:
-        if "login.cshtml" in response.url or "login_name" in response.text:
+        if (
+            "login.cshtml" in response.url
+            or BeautifulSoup(response.text, "html.parser").select_one(
+                'form input[name="login_name"]'
+            )
+            is not None
+        ):
             raise AuthenticationError("Final Surge session is missing or expired.")
 
     @staticmethod

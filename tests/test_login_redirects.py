@@ -22,11 +22,20 @@ def test_initial_login_page_redirect_is_followed_safely():
 
 @responses.activate
 def test_already_authenticated_redirect_does_not_resubmit_credentials():
+    responses.get(
+        BASE_URL + "login.cshtml",
+        body='<form><input name="login_name"></form>',
+    )
     responses.get(BASE_URL + "login.cshtml", status=302, headers={"Location": "/"})
+    responses.post(BASE_URL + "login.cshtml", status=302, headers={"Location": "/"})
     responses.get(BASE_URL, body="Dashboard")
-    FinalSurgeClient("fixture-user", "fixture-password", min_request_interval=0).login()
-    assert len(responses.calls) == 2
-    assert all(call.request.method == "GET" for call in responses.calls)
+    client = FinalSurgeClient(
+        "fixture-user", "fixture-password", min_request_interval=0
+    )
+    client.login()
+    client.login()
+    assert len(responses.calls) == 5
+    assert sum(call.request.method == "POST" for call in responses.calls) == 1
 
 
 @responses.activate
