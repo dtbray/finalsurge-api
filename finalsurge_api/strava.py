@@ -270,14 +270,24 @@ class StravaClient:
         moment = (
             value if isinstance(value, datetime) else datetime.combine(value, time.min)
         )
-        return int(moment.replace(tzinfo=timezone.utc).timestamp())
+        utc_moment = (
+            moment.astimezone(timezone.utc)
+            if moment.tzinfo is not None
+            else moment.replace(tzinfo=timezone.utc)
+        )
+        return int(utc_moment.timestamp())
 
     @staticmethod
     def _epoch_end(value: date | datetime) -> int:
         moment = (
             value if isinstance(value, datetime) else datetime.combine(value, time.max)
         )
-        return int(moment.replace(tzinfo=timezone.utc).timestamp())
+        utc_moment = (
+            moment.astimezone(timezone.utc)
+            if moment.tzinfo is not None
+            else moment.replace(tzinfo=timezone.utc)
+        )
+        return int(utc_moment.timestamp())
 
     @staticmethod
     def _onepassword_field(item: str, vault: str, field: str) -> str:
