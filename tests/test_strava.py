@@ -35,7 +35,7 @@ def test_gear_report_combines_lifetime_and_window_mileage(tmp_path):
     responses.add(
         responses.GET,
         f"{base}athlete",
-        json={"shoes": [{"id": "g1", "name": "Daily trainer", "distance": 160934.4}]},
+        json={"shoes": [{"id": "g1", "name": "Daily trainer", "distance": 80467.2}]},
     )
     responses.add(
         responses.GET,
@@ -53,7 +53,10 @@ def test_gear_report_combines_lifetime_and_window_mileage(tmp_path):
     reports = client.gear_report(after=date(2026, 7, 1))
 
     assert len(reports) == 1
+    # Detail mileage wins over the intentionally different athlete summary.
     assert reports[0].gear.lifetime_miles == 100
+    assert reports[0].gear.brand_name == "Example"
+    assert sum(call.request.url == f"{base}gear/g1" for call in responses.calls) == 1
     assert reports[0].period_miles == 5
     assert reports[0].activity_count == 1
 
