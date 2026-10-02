@@ -35,7 +35,7 @@ def test_gear_report_combines_lifetime_and_window_mileage(tmp_path):
     responses.add(
         responses.GET,
         f"{base}athlete",
-        json={"shoes": [{"id": "g1", "name": "Daily trainer"}]},
+        json={"shoes": [{"id": "g1", "name": "Daily trainer", "distance": 160934.4}]},
     )
     responses.add(
         responses.GET,
