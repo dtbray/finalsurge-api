@@ -95,7 +95,11 @@ class FinalSurgeClient:
         )
 
     def login(self) -> None:
-        login_page = self._request("GET", "login.cshtml", allow_redirects=False)
+        login_page = self._follow_login_redirects(
+            self._request("GET", "login.cshtml", allow_redirects=False)
+        )
+        if self._is_dashboard(login_page):
+            return
         soup = BeautifulSoup(login_page.text, "html.parser")
         form = next(
             (
@@ -114,24 +118,41 @@ class FinalSurgeClient:
             "login_remember": "on",
             "page_redirect": "/",
         }
-        # Preserve repeated hidden controls, not unchecked or non-data inputs.
-        payload = [
-            (str(field["name"]), str(field.get("value", "")))
-            for field in form.select('input[type="hidden"][name]')
-            if not field.has_attr("disabled")
-            and field.find_parent("fieldset", disabled=True) is None
-            and field["name"] not in credentials
-        ]
+        payload = []
+        # Match successful input controls, preserving repeated auxiliary fields.
+        for field in form.select("input[name]"):
+            field_type = str(field.get("type", "text")).casefold()
+            if (
+                field.has_attr("disabled")
+                or field.find_parent("fieldset", disabled=True) is not None
+                or field["name"] in credentials
+                or field_type in {"file", "submit", "button", "reset", "image"}
+                or (
+                    field_type in {"checkbox", "radio"}
+                    and not field.has_attr("checked")
+                )
+            ):
+                continue
+            default = "on" if field_type in {"checkbox", "radio"} else ""
+            payload.append((str(field["name"]), str(field.get("value", default))))
         payload.extend(credentials.items())
         destination = urljoin(login_page.url, form.get("action") or login_page.url)
         if not self._same_origin(destination):
             raise AuthenticationError("Final Surge login action must be same-origin.")
-        response = self._request(
-            "POST", destination, data=payload, allow_redirects=False
+        response = self._follow_login_redirects(
+            self._request("POST", destination, data=payload, allow_redirects=False)
         )
+        self._require_authenticated(response)
+        if not self._is_dashboard(response):
+            raise AuthenticationError(
+                "Final Surge login did not reach the verified dashboard. "
+                "Interactive authentication or a changed page may require review."
+            )
+
+    def _follow_login_redirects(self, response: requests.Response) -> requests.Response:
         for _ in range(5):
             if not 300 <= response.status_code < 400:
-                break
+                return response
             location = response.headers.get("Location", "").strip()
             if not location:
                 raise AuthenticationError("Final Surge login redirect has no Location.")
@@ -140,27 +161,34 @@ class FinalSurgeClient:
                 raise AuthenticationError(
                     "Final Surge login redirect must be same-origin."
                 )
+            # Never replay credentials on 307/308 or follow unchecked redirects.
             response = self._request("GET", redirect, allow_redirects=False)
-        self._require_authenticated(response)
-        if (
-            300 <= response.status_code < 400
-            or not self._same_origin(response.url)
-            or urlsplit(response.url).path not in {"", "/"}
-            or "Dashboard" not in response.text
-        ):
-            raise AuthenticationError(
-                "Final Surge login failed or needs interactive MFA."
-            )
+        if 300 <= response.status_code < 400:
+            raise AuthenticationError("Final Surge login has too many redirects.")
+        return response
+
+    @staticmethod
+    def _is_dashboard(response: requests.Response) -> bool:
+        # Preserve main's positive root/Dashboard invariant. Cookie presence or
+        # an arbitrary non-login page is not sufficient proof of authentication.
+        return (
+            FinalSurgeClient._same_origin(response.url)
+            and urlsplit(response.url).path in {"", "/"}
+            and response.status_code < 300
+            and "Dashboard" in response.text
+            and "login_name" not in response.text
+        )
 
     @staticmethod
     def _same_origin(url: str) -> bool:
         try:
             parsed = urlsplit(url)
-            port = parsed.port if parsed.port is not None else 443
+            expected = urlsplit(BASE_URL)
             return (
-                parsed.scheme.lower() == "https"
-                and parsed.hostname == urlsplit(BASE_URL).hostname
-                and port == 443
+                parsed.scheme.lower() == expected.scheme.lower() == "https"
+                and parsed.hostname == expected.hostname
+                and (parsed.port if parsed.port is not None else 443)
+                == (expected.port if expected.port is not None else 443)
                 and parsed.username is None
                 and parsed.password is None
             )

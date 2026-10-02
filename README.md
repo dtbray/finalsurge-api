@@ -7,6 +7,15 @@ when their site changes.
 It deliberately defaults to read-only behavior. Workout creation is enabled
 only by passing `allow_writes=True` at the call site.
 
+Login follows at most five same-origin HTTPS redirects per request phase and
+never resubmits credentials on redirects. It retains the existing positive
+success contract: the origin root page must contain `Dashboard` and no login
+form. A cookie alone or an unfamiliar landing page is not proof of success.
+MFA or a changed page requires interactive authentication or a reviewed client
+update, rather than silently claiming an authenticated session. Shoe/bike
+creation is not supported until form provenance and write confirmation are
+independently established (see issue #6).
+
 ```python
 from datetime import date
 from finalsurge_api import FinalSurgeClient, PlannedWorkout

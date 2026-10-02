@@ -13,6 +13,10 @@ LOGIN_FORM = """<form action="/login.cshtml"><input name="login_name">
 <input type="hidden" name="repeat" value="b">
 <input type="hidden" name="disabled" value="no" disabled>
 <fieldset disabled><input type="hidden" name="fieldset" value="no"></fieldset>
+<input type="text" name="auxiliary" value="visible-step">
+<input type="Hidden" name="mixed_case" value="hidden-step">
+<input type="checkbox" name="checked_box" checked>
+<input type="radio" name="checked_radio" value="chosen" checked>
 <input type="checkbox" name="unchecked" value="no">
 <input type="radio" name="radio" value="no">
 <input type="submit" name="submit" value="no">
@@ -36,6 +40,10 @@ def test_login_preserves_repeated_hidden_fields_but_not_non_data_controls():
     assert payload["login_name"] == ["fixture-user"]
     assert payload["login_password"] == ["fixture-password"]
     assert payload["page_redirect"] == ["/"]
+    assert payload["auxiliary"] == ["visible-step"]
+    assert payload["mixed_case"] == ["hidden-step"]
+    assert payload["checked_box"] == ["on"]
+    assert payload["checked_radio"] == ["chosen"]
     assert (
         not {"disabled", "fieldset", "unchecked", "radio", "submit", "file"}
         & payload.keys()
@@ -124,7 +132,7 @@ def test_login_requires_positive_dashboard_confirmation(destination, body):
         BASE_URL + "login.cshtml", status=302, headers={"Location": destination}
     )
     responses.get(BASE_URL.rstrip("/") + destination, body=body)
-    with pytest.raises(AuthenticationError, match="interactive MFA"):
+    with pytest.raises(AuthenticationError, match="verified dashboard"):
         client().login()
 
 
