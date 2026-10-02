@@ -5,7 +5,7 @@ import threading
 import time as clock
 from dataclasses import dataclass
 from datetime import date, time
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import requests
 from bs4 import BeautifulSoup
@@ -41,6 +41,32 @@ class LibraryWorkout:
     activity_type: str
     distance_miles: float | None
     duration_minutes: int | None
+
+
+@dataclass(frozen=True)
+class Shoe:
+    name: str
+    brand: str = ""
+    model: str = ""
+    start_distance: float = 0
+    distance_unit: str = "mi"
+    alert_distance: float | None = None
+    notes: str = ""
+    purchase_date: date | None = None
+    size: float | None = None
+
+
+@dataclass(frozen=True)
+class Bike:
+    name: str
+    brand: str = ""
+    model: str = ""
+    start_distance: float = 0
+    distance_unit: str = "mi"
+    alert_distance: float | None = None
+    notes: str = ""
+    purchase_date: date | None = None
+    track_distance: bool = True
 
 
 class FinalSurgeClient:
@@ -95,25 +121,127 @@ class FinalSurgeClient:
         )
 
     def login(self) -> None:
-        response = self._request(
-            "POST",
-            "login.cshtml",
-            data={
+        login_page = self._request("GET", "login.cshtml")
+        soup = BeautifulSoup(login_page.text, "html.parser")
+        form = next(
+            (
+                candidate
+                for candidate in soup.select("form")
+                if candidate.select_one('[name="login_name"]')
+            ),
+            None,
+        )
+        if form is None:
+            raise AuthenticationError("Final Surge login form was not found.")
+        payload = {
+            field["name"]: field.get("value", "")
+            for field in form.select("input[name]")
+        }
+        payload.update(
+            {
                 "SubmitType": "Login",
                 "login_name": self.username,
                 "login_password": self.password,
                 "login_remember": "on",
-                "page_redirect": "/",
+            }
+        )
+        destination = urljoin(login_page.url, form.get("action") or login_page.url)
+        if urlsplit(destination)[:2] != urlsplit(BASE_URL)[:2]:
+            raise AuthenticationError("Final Surge login action must be same-origin.")
+        response = self._request(
+            "POST",
+            destination,
+            data=payload,
+            allow_redirects=False,
+        )
+        if response.is_redirect:
+            redirect = urljoin(destination, response.headers.get("Location", ""))
+            if urlsplit(redirect)[:2] != urlsplit(BASE_URL)[:2]:
+                raise AuthenticationError(
+                    "Final Surge login redirect must be same-origin."
+                )
+            response = self._request("GET", redirect)
+        self._require_authenticated(response)
+
+    def create_shoe(
+        self, shoe: Shoe, *, allow_writes: bool = False
+    ) -> requests.Response:
+        """Create a shoe with existing mileage as its starting distance."""
+        if not allow_writes:
+            raise WriteProtectionError(
+                "Writes are disabled. Pass allow_writes=True only after review."
+            )
+        self._require_gear(shoe.name, shoe.start_distance, shoe.distance_unit)
+        page = self._request("GET", "EquipmentShoes.cshtml")
+        self._require_authenticated(page)
+        brand_key = self._brand_key(page.text, shoe.brand)
+        response = self._request(
+            "POST",
+            "EquipmentShoes.cshtml",
+            data={
+                "add": "1",
+                "view": "",
+                "ShoeName": shoe.name,
+                "ShoeBrand": brand_key,
+                "ShoeModel": shoe.model,
+                "ShoeCost": "",
+                "ShoeDate": self._format_date(shoe.purchase_date),
+                "ShoeSize": "" if shoe.size is None else str(shoe.size),
+                "StartDist": str(shoe.start_distance),
+                "DistType": shoe.distance_unit,
+                "DistAlert": (
+                    "" if shoe.alert_distance is None else str(shoe.alert_distance)
+                ),
+                "DistAlertType": shoe.distance_unit,
+                "ShoeNotes": shoe.notes,
+                "btnSubmit": "Add Shoe",
             },
             allow_redirects=True,
         )
-        if (
-            response.url.rstrip("/") != BASE_URL.rstrip("/")
-            or "Dashboard" not in response.text
-        ):
-            raise AuthenticationError(
-                "Final Surge login failed or needs interactive MFA."
+        self._require_authenticated(response)
+        return response
+
+    def create_bike(
+        self, bike: Bike, *, allow_writes: bool = False
+    ) -> requests.Response:
+        """Create a bike with existing mileage as its starting distance."""
+        if not allow_writes:
+            raise WriteProtectionError(
+                "Writes are disabled. Pass allow_writes=True only after review."
             )
+        self._require_gear(bike.name, bike.start_distance, bike.distance_unit)
+        page = self._request("GET", "EquipmentBikes.cshtml")
+        self._require_authenticated(page)
+        brand_key = self._brand_key(page.text, bike.brand)
+        response = self._request(
+            "POST",
+            "EquipmentBikes.cshtml",
+            data={
+                "add": "1",
+                "view": "",
+                "ShoeName": bike.name,
+                "ShoeBrand": brand_key,
+                "ShoeModel": bike.model,
+                "ShoeCost": "",
+                "ShoeDate": self._format_date(bike.purchase_date),
+                "StartDist": str(bike.start_distance),
+                "DistType": bike.distance_unit,
+                "TrackDist": "True" if bike.track_distance else "False",
+                "FrontDist": "",
+                "FrontDistType": bike.distance_unit,
+                "RearDist": "",
+                "RearDistType": bike.distance_unit,
+                "DistAlert": (
+                    "" if bike.alert_distance is None else str(bike.alert_distance)
+                ),
+                "DistAlertType": bike.distance_unit,
+                "ShoeNotes": bike.notes,
+                "btnSubmit": "Add Bike",
+            },
+            allow_redirects=True,
+        )
+        self._require_authenticated(response)
+        return response
 
     def calendar(self, day: date) -> str:
         response = self._request(
@@ -171,7 +299,7 @@ class FinalSurgeClient:
         return response
 
     def _calendar_payload(self, workout: PlannedWorkout) -> dict[str, str]:
-        date_text = workout.day.strftime("%-m/%-d/%Y")
+        date_text = self._format_date(workout.day)
         time_text = workout.at.strftime("%I:%M %p").lstrip("0") if workout.at else ""
         distance = "" if workout.distance_miles is None else str(workout.distance_miles)
         duration = self._format_duration(workout.duration_minutes)
@@ -245,6 +373,30 @@ class FinalSurgeClient:
             return ""
         hours, remaining_minutes = divmod(minutes, 60)
         return f"{hours}:{remaining_minutes:02d}:00"
+
+    @staticmethod
+    def _format_date(value: date | None) -> str:
+        return "" if value is None else f"{value.month}/{value.day}/{value.year}"
+
+    @staticmethod
+    def _brand_key(html: str, brand: str) -> str:
+        if not brand:
+            return ""
+        for option in BeautifulSoup(html, "html.parser").select(
+            'select[name="ShoeBrand"] option'
+        ):
+            if option.get_text(" ", strip=True).casefold() == brand.casefold():
+                return option.get("value", "")
+        return ""
+
+    @staticmethod
+    def _require_gear(name: str, start_distance: float, distance_unit: str) -> None:
+        if not name.strip():
+            raise ValueError("A gear name is required.")
+        if start_distance < 0:
+            raise ValueError("start_distance cannot be negative.")
+        if distance_unit not in {"mi", "km"}:
+            raise ValueError("distance_unit must be 'mi' or 'km'.")
 
     @staticmethod
     def _require_planned_workout(workout: PlannedWorkout) -> None:
