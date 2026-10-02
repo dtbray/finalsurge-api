@@ -3,11 +3,9 @@ from datetime import date, time
 import pytest
 
 from finalsurge_api import (
-    Bike,
     FinalSurgeClient,
     LibraryWorkout,
     PlannedWorkout,
-    Shoe,
     WriteProtectionError,
 )
 
@@ -73,35 +71,3 @@ def test_parse_library_preserves_planned_distance_and_duration():
             duration_minutes=90,
         )
     ]
-
-
-def test_shoe_write_requires_explicit_opt_in():
-    client = FinalSurgeClient("user", "password")
-
-    with pytest.raises(WriteProtectionError):
-        client.create_shoe(Shoe("Daily trainers"))
-
-
-def test_bike_write_requires_explicit_opt_in():
-    client = FinalSurgeClient("user", "password")
-
-    with pytest.raises(WriteProtectionError):
-        client.create_bike(Bike("Road bike"))
-
-
-def test_brand_key_matches_case_insensitively():
-    html = """
-    <select name="ShoeBrand">
-      <option value=""></option><option value="brand-id">Saucony</option>
-    </select>
-    """
-
-    assert FinalSurgeClient._brand_key(html, "saucony") == "brand-id"
-
-
-def test_gear_validation_rejects_invalid_distance():
-    with pytest.raises(ValueError):
-        FinalSurgeClient._require_gear("Shoes", -1, "mi")
-
-    with pytest.raises(ValueError):
-        FinalSurgeClient._require_gear("Shoes", 1, "meters")

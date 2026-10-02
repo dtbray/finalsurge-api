@@ -1,4 +1,4 @@
-from .client import Bike, FinalSurgeClient, LibraryWorkout, PlannedWorkout, Shoe
+from .client import FinalSurgeClient, LibraryWorkout, PlannedWorkout
 from .exceptions import AuthenticationError, FinalSurgeError, WriteProtectionError
 from .strava import (
     GearReport,
@@ -11,13 +11,11 @@ from .strava import (
 
 __all__ = [
     "AuthenticationError",
-    "Bike",
     "FinalSurgeClient",
     "FinalSurgeError",
-    "GearReport",
     "LibraryWorkout",
     "PlannedWorkout",
-    "Shoe",
+    "GearReport",
     "StravaActivity",
     "StravaAuthenticationError",
     "StravaClient",
